@@ -1,15 +1,51 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>ESP32 Web Server</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" type="text/css" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Sensor Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;500;700&display=swap" rel="stylesheet">
+    <script>
+        function getSensorData() {
+            fetch('/sensor')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('temperature').innerText = data.temperature + ' °C';
+                    document.getElementById('humidity').innerText = data.humidity + ' %';
+                    document.getElementById('moisture').innerText = data.moisture + ' %';
+                    document.getElementById('light').innerText = data.light + ' lx';
+                })
+                .catch(error => console.error('Error fetching sensor data:', error));
+        }
+        setInterval(getSensorData, 2000);
+    </script>
 </head>
 <body>
-  <h1>ESP32 Web Server</h1>
-  <p>GPIO state: <strong> %STATE%</strong></p>
-  <p><a href="/on"><button class="button">ON</button></a></p>
-  <p><a href="/off"><button class="button button2">OFF</button></a></p>
+    <div class="overlay"></div>
+    <div class="container">
+        <header>
+            <h1>ESP32 Sensor Dashboard</h1>
+            <p>Real-time environmental data monitoring</p>
+        </header>
+        <main class="data-container">
+            <div class="data-box">
+                <h2>🌡️ Temperature</h2>
+                <p id="temperature">--</p>
+            </div>
+            <div class="data-box">
+                <h2>💧 Humidity</h2>
+                <p id="humidity">--</p>
+            </div>
+            <div class="data-box">
+                <h2>🌱 Moisture</h2>
+                <p id="moisture">--</p>
+            </div>
+            <div class="data-box">
+                <h2>🔆 Light</h2>
+                <p id="light">--</p>
+            </div>
+        </main>
+    </div>
 </body>
 </html>
