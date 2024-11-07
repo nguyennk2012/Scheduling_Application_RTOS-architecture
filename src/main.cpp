@@ -311,10 +311,10 @@ void setup() {
     esp_task_wdt_delete(NULL);    // Remove WDT for the main task if necessary
 
     // Create tasks for Wi-Fi, server
-    xTaskCreate(wifiTask, "WiFiTask", 8192, NULL, 3, NULL);
-    xTaskCreate(setupWebServer, "ServerTask", 8192, NULL, 3, NULL);
+    xTaskCreate(wifiTask, "WiFiTask", 8192, NULL, 2, NULL);
+    xTaskCreate(setupWebServer, "ServerTask", 8192, NULL, 2, NULL);
 
-    Wire.begin(11, 12);
+    //Wire.begin(11, 12);
     dht20.begin();
     lcd.begin();
     lcd.backlight();
@@ -324,23 +324,25 @@ void setup() {
     //lcdMutex = xSemaphoreCreateMutex();
     taskListMutex = xSemaphoreCreateMutex();
 
-    xTaskCreate(backgroundTask, "Background Task", 4096, NULL, 1, NULL);
-    xTaskCreate(taskMQTTClient, "MQTTClient", 8192, NULL, 1, NULL);
+    //xTaskCreate(backgroundTask, "Background Task", 4096, NULL, 2, NULL);
+    //xTaskCreate(taskMQTTClient, "MQTTClient", 8192, NULL, 2, NULL);
     xTaskCreate(taskScheduler, "Scheduler", 8192 * 4, NULL, 3, NULL);
-    xTaskCreate(taskMQTTCommunication, "Task MQTT Communication", 8192, NULL, 2, NULL);
+    //xTaskCreate(taskMQTTCommunication, "Task MQTT Communication", 8192, NULL, 1, NULL);
 
-    /*time_t arrivalTime1 = convertToTimeT(2024, 11, 7, 10, 44, 0);
-    Task* newTask1 = new Task("Task 1", arrivalTime1, 10000, "formula 1", 1, "once", true);
+    // Task 1 với thời gian bắt đầu là 7/11/2024 22:39:00, thời gian thực hiện 60 giây (60000 ms), công thức tưới 1, priority 1
+    time_t arrivalTime1 = convertToTimeT(2024, 11, 7, 22, 39, 0);
+    Task* newTask1 = new Task("Task 1", arrivalTime1, 60000, "1", 1, "once", true);
     scheduler.addTask(newTask1);
 
-    time_t arrivalTime2 = convertToTimeT(2024, 11, 7, 10, 44, 5);
-    Task* newTask2 = new Task("Task 2", arrivalTime2, 10000, "formula 1", 1, "once", true);
+    // Task 2 với thời gian bắt đầu là 7/11/2024 22:39:30, thời gian thực hiện 60 giây (60000 ms), công thức tưới 1, priority 2
+    time_t arrivalTime2 = convertToTimeT(2024, 11, 7, 22, 39, 30);
+    Task* newTask2 = new Task("Task 2", arrivalTime2, 60000, "1", 2, "once", true);
     scheduler.addTask(newTask2);
 
-    time_t arrivalTime3 = convertToTimeT(2024, 11, 7, 10, 44, 10);
-    Task* newTask3 = new Task("Task 3", arrivalTime3, 10000, "formula 2", 1, "once", true);
-    scheduler.addTask(newTask3);*/
-    
+    // Task 3 với thời gian bắt đầu là 7/11/2024 22:40:00, thời gian thực hiện 60 giây (60000 ms), công thức tưới 2, priority 1
+    time_t arrivalTime3 = convertToTimeT(2024, 11, 7, 22, 40, 0);
+    Task* newTask3 = new Task("Task 3", arrivalTime3, 60000, "2", 1, "once", true);
+    scheduler.addTask(newTask3);
 }
 
 // Task to handle Wi-Fi connection
@@ -422,14 +424,26 @@ void taskScheduler(void* pvParameters) {
         printFormattedTime(currentTime, buffer, sizeof(buffer));
         Serial.printf("[INFO] Current time is: %s\n", buffer);
 
+        // Attempt to resume or start the next task
         if (!runningTask && !preemptedTasks.isEmpty()) {
-            // Resume from preempted tasks if there is no current running task
             if (xSemaphoreTake(taskListMutex, portMAX_DELAY) == pdTRUE) {
-                runningTask = preemptedTasks.popHighestPriorityTask();
-                if (runningTask) {
-                    currentFormula = runningTask->formula;  // Set the current formula context
-                    Serial.printf("[INFO] Resuming preempted task: %s with remaining time: %d ms. Formula: %s\n",
-                                  runningTask->name.c_str(), runningTask->remainingTime, currentFormula.c_str());
+                Task* preemptedTask = preemptedTasks.popHighestPriorityTask();
+                
+                if (preemptedTask) {
+                    // If we are starting with a new formula or this is a truly preempted task in the same formula
+                    if (currentFormula.isEmpty() || (preemptedTask->formula == currentFormula && preemptedTask->remainingTime > 0)) {
+                        currentFormula = preemptedTask->formula;
+                        runningTask = preemptedTask;
+                        Serial.printf("[INFO] Resuming preempted task: %s with remaining time: %d ms. Formula: %s\n",
+                                      runningTask->name.c_str(), runningTask->remainingTime, currentFormula.c_str());
+                    } else if (preemptedTask->remainingTime == 0) {
+                        // Treat as a fresh start for the new formula
+                        currentFormula = preemptedTask->formula;
+                        runningTask = preemptedTask;
+                        runningTask->remainingTime = runningTask->burstTime;  // Reset to full burst time
+                        Serial.printf("[INFO] Starting execution of task: %s with executing time: %d ms. Formula: %s\n",
+                                      runningTask->name.c_str(), runningTask->burstTime, currentFormula.c_str());
+                    }
                 }
                 xSemaphoreGive(taskListMutex);
             }
@@ -447,20 +461,22 @@ void taskScheduler(void* pvParameters) {
                         if (runningTask) {
                             Serial.printf("[WARNING] Preempting task %s for task %s.\n",
                                           runningTask->name.c_str(), readyTask->name.c_str());
+                            Serial.printf("[INFO] Starting execution of task: %s with remaining time: %d ms. Formula: %s\n",
+                                      readyTask->name.c_str(), readyTask->burstTime, currentFormula.c_str());              
                             preemptedTasks.addTask(runningTask);
                         }
                         runningTask = readyTask;
                         currentFormula = runningTask->formula;
                         runningTask->remainingTime = runningTask->burstTime;  // Initialize remaining time
                         runningTask->state = RUNNING;
-                        Serial.printf("[INFO] Running task: %s with remaining time: %d ms. Formula: %s\n",
-                                      runningTask->name.c_str(), runningTask->remainingTime, currentFormula.c_str());
+                        Serial.printf("[INFO] Starting execution of task: %s with executing time: %d ms. Formula: %s\n",
+                                      runningTask->name.c_str(), runningTask->burstTime, currentFormula.c_str());
                     }
                 } else {
                     // Different formula - check if all tasks with current formula are done
                     if (scheduler.areAllTasksCompleted(currentFormula)) {
                         // Switch to the new formula
-                        Serial.printf("[INFO] All tasks for the current formula (%s) are completed, resetting formula context\n", currentFormula.c_str());
+                        Serial.printf("[INFO] All tasks for the current formula %s are completed, resetting formula context\n", currentFormula.c_str());
                         currentFormula = readyTask->formula;
                         runningTask = readyTask;
                         runningTask->remainingTime = runningTask->burstTime;
@@ -486,12 +502,19 @@ void taskScheduler(void* pvParameters) {
                     // Check if there are any remaining preempted tasks with the current formula
                     if (!preemptedTasks.isEmpty()) {
                         runningTask = preemptedTasks.popHighestPriorityTask();
-                        if (runningTask) {
+                        if (runningTask && runningTask->formula == currentFormula) { 
+                            // Only resume tasks that match the current formula
                             currentFormula = runningTask->formula;  // Set the formula to the preempted task's formula
                             Serial.printf("[INFO] Resuming preempted task: %s with remaining time: %d ms. Formula: %s\n",
-                                          runningTask->name.c_str(), runningTask->remainingTime, currentFormula.c_str());
+                                        runningTask->name.c_str(), runningTask->remainingTime, currentFormula.c_str());
+                        } else if (runningTask) {
+                            // If the preempted task does not match the current formula, push it back to the preempted list
+                            preemptedTasks.addTask(runningTask);
+                            Serial.printf("[INFO] All tasks for formula %s are completed. Ready for new formula.\n", currentFormula.c_str());
+                            runningTask = nullptr;  // Clear runningTask to allow for a new formula task
                         }
-                    } else if (scheduler.areAllTasksCompleted(currentFormula)) {
+                    } 
+                    else if (scheduler.areAllTasksCompleted(currentFormula)) {
                         // If no preempted tasks, reset currentFormula to allow the next formula to run
                         Serial.printf("[INFO] All tasks for formula %s are completed. Ready for new formula.\n", currentFormula.c_str());
                         currentFormula = "";
@@ -510,7 +533,6 @@ void executeTask(Task*& task) {
     if (!relayInitialized) {
         pinMode(6, OUTPUT);
         relayInitialized = true;
-        Serial.println("[DEBUG] Relay initialized.");
     }
 
     if (task->remainingTime == 0){
@@ -520,12 +542,13 @@ void executeTask(Task*& task) {
     esp_task_wdt_reset();
     int loopCounter = 0;
     digitalWrite(6, HIGH);  // Activate relay
+    Serial.printf("[DEBUG] Relay ON - Task %s starts.\n", task->name.c_str());
 
     while (task && task->remainingTime > 0) {
         loopCounter++;
         int timeChunk = min(100, task->remainingTime);
-        Serial.printf("[INFO] Running task: %s (Remaining time: %d ms), Loop Count: %d\n", 
-                      task->name.c_str(), task->remainingTime, loopCounter);
+        /*Serial.printf("[INFO] Running task: %s (Remaining time: %d ms), Loop Count: %d\n", 
+                      task->name.c_str(), task->remainingTime, loopCounter);*/
 
         esp_task_wdt_reset();  // Reset watchdog periodically
         vTaskDelay(timeChunk / portTICK_PERIOD_MS);
@@ -539,6 +562,8 @@ void executeTask(Task*& task) {
                 scheduler.shouldPreempt(task, preemptingTask)) {
                 Serial.printf("[WARNING] Task %s preempted by higher-priority task %s\n", 
                               task->name.c_str(), preemptingTask->name.c_str());
+                Serial.printf("[INFO] Starting execution of task: %s with executing time: %d ms. Formula: %s\n",
+                                preemptingTask->name.c_str(), preemptingTask->burstTime, preemptingTask->formula.c_str());
                 preemptedTasks.addTask(task);  // Save current task state
                 task = preemptingTask;  // Switch to preempting task
                 xSemaphoreGive(taskListMutex);
@@ -552,8 +577,13 @@ void executeTask(Task*& task) {
 
     if (task && task->remainingTime <= 0) {
         task->remainingTime = 0;
-        task->state = COMPLETED;
-        Serial.printf("[INFO] Task %s completed.\n", task->name.c_str());
+
+        timeClient.update();
+        time_t completionTime = timeClient.getEpochTime();
+        char timeBuffer[20];
+        printFormattedTime(completionTime, timeBuffer, sizeof(timeBuffer));
+
+        Serial.printf("[INFO] Task %s completed at %s.\n", task->name.c_str(), timeBuffer);
 
         // Update the task's recurrence if needed
         scheduler.updateRecurrence(task);
@@ -564,7 +594,7 @@ void executeTask(Task*& task) {
     }
 }
 
-void backgroundTask(void* pvParameters) {
+/*void backgroundTask(void* pvParameters) {
     pinMode(6, OUTPUT);  // Chân điều khiển thiết bị, ví dụ bơm nước
     bool lightState = false;  // Biến theo dõi trạng thái đèn LED
     pixels3.begin(); // Khởi tạo Neopixel
@@ -602,7 +632,7 @@ void backgroundTask(void* pvParameters) {
 
         vTaskDelay(2000 / portTICK_PERIOD_MS);  // Dừng trong 2 giây
     }
-}
+}*/
 
 void taskMQTTClient(void* pvParameters) {
     int retryCount = 0;
@@ -633,7 +663,7 @@ void taskMQTTClient(void* pvParameters) {
 
 void taskMQTTCommunication(void* pvParameters) {
   while (true) {
-    dht20.read();
+    //dht20.read();
     // Read sensors
     float temperature = dht20.getTemperature();
     float humidity = dht20.getHumidity();
